@@ -10,7 +10,7 @@ env:
 jobs:
   Windows11_25H2_amd64:
     runs-on: windows-latest
-    timeout-minutes: 90 # 为上传大文件预留充足时间
+    timeout-minutes: 270 # 为上传大文件预留充足时间
 
     steps:
     # 检出本仓库
