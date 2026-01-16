@@ -83,14 +83,22 @@ jobs:
         echo "打包完成"
         dir *.7z*
 
-    # 上传到Google Drive (请确保已配置 GDRIVE_CREDENTIALS 和 parent-folder-id)
-    - name: Upload to Google Drive
-      uses: EndBug/google-drive-upload-action@v1
+    # 上传到Google Drive (使用官方Google Actions)
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
       with:
-        credentials: ${{ secrets.GDRIVE_CREDENTIALS }}
-        folder-id: '1RqedO6FcIk6uegGq9z8_Y2f_T-VObHf-' # 替换为您的文件夹ID
-        file-path: ./${{ env.FILE_NAME }}-${{ env.Build_VERSION }}.7z* # 注意参数名从 source-filepath 改为了 file-path
-        file-name: Windows11_25H2_amd64_自动构建.7z # 参数名从 target-filepath 改为了 file-name
+        credentials_json: ${{ secrets.GDRIVE_CREDENTIALS }} # 这里是你之前创建的Secret，内容是Base64编码的凭据JSON
+
+    - name: Upload to Google Drive
+      uses: google-github-actions/upload-google-drive@v2
+      with:
+        # 要上传的文件路径
+        file: ./${{ env.FILE_NAME }}-${{ env.Build_VERSION }}.7z*
+        # 目标Google Drive文件夹的ID
+        folderId: '1RqedO6FcIk6uegGq9z8_Y2f_T-VObHf-' # 请替换为你的文件夹ID
+        # (可选) 在云端重命名文件
+        name: Windows11_25H2_amd64_自动构建.7z
+        # (可选) 同名时是否覆盖，默认为 false
         overwrite: true
 
     # 上传到Artifacts (备用)
