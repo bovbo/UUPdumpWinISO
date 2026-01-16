@@ -54,9 +54,10 @@ jobs:
         echo ========================================
         echo 构建版本: %Build_VERSION%
         echo 文件目录: %FILE_NAME%
+        echo 触发方式: %GITHUB_EVENT_NAME%
         echo ========================================
 
-    # 3. 智能部署无人值守配置文件（修复版）
+    # 3. 智能部署无人值守配置文件
     - name: Deploy autounattend.xml (智能选择)
       id: deploy_config
       shell: powershell
@@ -65,131 +66,104 @@ jobs:
         Write-Host "主用配置路径: ${{ env.PRIMARY_CONFIG_PATH }}"
         Write-Host "备用配置路径: ${{ env.BACKUP_CONFIG_PATH }}"
         
-        # 输出变量初始化
+        # 初始化输出变量
         $configSource = "none"
         $configUsed = "false"
-        $skipOEM = "false"
         
-        # 检查是否跳过OEM集成（仅在工作流调度时有效）
-        if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
-          if ('${{ inputs.skip_oem_integration }}' -eq 'true') {
+        # 对于push和pull_request事件，直接尝试部署配置文件
+        $githubEventName = "${{ github.event_name }}"
+        
+        if ($githubEventName -eq "workflow_dispatch") {
+          # 处理手动触发时的输入参数
+          $skipOEM = "${{ github.event.inputs.skip_oem_integration }}"
+          $usePrimary = "${{ github.event.inputs.use_primary_config }}"
+          
+          Write-Host "手动触发模式"
+          Write-Host "跳过OEM集成: $skipOEM"
+          Write-Host "使用主用配置: $usePrimary"
+          
+          if ($skipOEM -eq "true") {
             Write-Host "⏭️ 用户选择跳过无人值守配置集成，将构建纯净ISO"
-            $skipOEM = "true"
-            $configUsed = "false"
-            $configSource = "skipped"
-            Write-Output "SKIP_OEM=true"
             Write-Output "CONFIG_SOURCE=skipped"
             Write-Output "CONFIG_USED=false"
             exit 0
           }
-        }
-        
-        # 确定使用哪个配置文件
-        $usePrimary = $true
-        
-        # 手动触发时，优先使用用户选择
-        if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
-          Write-Host "手动触发模式，检查用户选择..."
-          if ('${{ inputs.use_primary_config }}' -eq 'true') {
-            Write-Host "用户选择使用主用配置"
-            $usePrimary = $true
+          
+          # 检查主用配置
+          if ($usePrimary -eq "true" -and (Test-Path "${{ env.PRIMARY_CONFIG_PATH }}")) {
+            Write-Host "✅ 使用用户选择的主用配置"
+            $configSource = "primary"
+            $configUsed = "true"
+          } elseif (Test-Path "${{ env.BACKUP_CONFIG_PATH }}") {
+            Write-Host "✅ 使用备用配置"
+            $configSource = "backup"
+            $configUsed = "true"
+            
+            # 确保目标目录存在
+            if (-not (Test-Path "${{ env.TARGET_OEM_PATH }}")) {
+              New-Item -ItemType Directory -Path "${{ env.TARGET_OEM_PATH }}" -Force | Out-Null
+            }
+            
+            # 复制配置文件
+            Copy-Item "${{ env.BACKUP_CONFIG_PATH }}" "${{ env.TARGET_OEM_PATH }}" -Force
           } else {
-            Write-Host "用户选择不使用主用配置，将尝试使用备用配置"
-            $usePrimary = $false
+            Write-Host "⚠️ 未找到可用配置文件"
           }
         } else {
-          Write-Host "自动触发模式，尝试查找可用配置..."
-        }
-        
-        # 检查主用配置是否存在
-        if ($usePrimary -and (Test-Path "${{ env.PRIMARY_CONFIG_PATH }}")) {
-          Write-Host "✅ 主用配置文件存在"
-          $configSource = "primary"
-          $configUsed = "true"
-        } elseif (Test-Path "${{ env.BACKUP_CONFIG_PATH }}") {
-          Write-Host "✅ 备用配置文件存在"
-          $configSource = "backup"
-          $configUsed = "true"
+          # 自动触发模式（push/pull_request）
+          Write-Host "自动触发模式 ($githubEventName)"
           
-          # 确保目标目录存在
-          if (-not (Test-Path "${{ env.TARGET_OEM_PATH }}")) {
-            New-Item -ItemType Directory -Path "${{ env.TARGET_OEM_PATH }}" -Force | Out-Null
-            Write-Host "创建目录: ${{ env.TARGET_OEM_PATH }}"
+          # 首先检查主用配置
+          if (Test-Path "${{ env.PRIMARY_CONFIG_PATH }}") {
+            Write-Host "✅ 找到主用配置"
+            $configSource = "primary"
+            $configUsed = "true"
+          } elseif (Test-Path "${{ env.BACKUP_CONFIG_PATH }}") {
+            Write-Host "✅ 找到备用配置，将复制到目标位置"
+            $configSource = "backup"
+            $configUsed = "true"
+            
+            # 确保目标目录存在
+            if (-not (Test-Path "${{ env.TARGET_OEM_PATH }}")) {
+              New-Item -ItemType Directory -Path "${{ env.TARGET_OEM_PATH }}" -Force | Out-Null
+            }
+            
+            # 复制配置文件
+            Copy-Item "${{ env.BACKUP_CONFIG_PATH }}" "${{ env.TARGET_OEM_PATH }}" -Force
+          } else {
+            Write-Host "⚠️ 未找到任何配置文件"
+            $configSource = "none"
+            $configUsed = "false"
           }
-          
-          # 复制备用配置文件到目标位置
-          Copy-Item "${{ env.BACKUP_CONFIG_PATH }}" "${{ env.TARGET_OEM_PATH }}" -Force
-          Write-Host "已将备用配置复制到: ${{ env.TARGET_OEM_PATH }}"
-        } else {
-          Write-Host "⚠️ 主用和备用配置文件都不存在"
-          $configSource = "none"
-          $configUsed = "false"
-          Write-Host "ℹ️ 将构建不含无人值守配置的ISO"
         }
         
-        # 输出变量
+        # 输出结果
         Write-Output "CONFIG_SOURCE=$configSource"
         Write-Output "CONFIG_USED=$configUsed"
         
         if ($configUsed -eq "true") {
-          Write-Host "✅ 无人值守配置文件已就绪"
-          Write-Host "配置文件位置: ${{ env.TARGET_OEM_PATH }}autounattend.xml"
+          Write-Host "✅ 配置文件部署完成: ${{ env.TARGET_OEM_PATH }}autounattend.xml"
+        } else {
+          Write-Host "ℹ️ 未使用配置文件，将构建纯净ISO"
         }
-        
-        Write-Host "配置文件部署步骤完成"
 
     # 4. 验证配置文件 (仅当使用配置时)
     - name: Validate autounattend.xml
       if: steps.deploy_config.outputs.CONFIG_USED == 'true'
       shell: powershell
-      continue-on-error: true  # 验证失败也不停止构建
+      continue-on-error: true
       run: |
         $configPath = "${{ env.TARGET_OEM_PATH }}autounattend.xml"
-        Write-Host "验证配置文件: $configPath"
-        
-        try {
-          # 检查文件是否存在
-          if (-not (Test-Path $configPath)) {
-            throw "配置文件不存在: $configPath"
-          }
-          
-          # 检查文件大小
-          $fileSize = (Get-Item $configPath).Length
-          Write-Host "文件大小: $fileSize 字节"
-          
-          if ($fileSize -lt 100) {
-            Write-Warning "配置文件可能过小，请检查内容"
-          }
-          
-          # 尝试读取为XML验证基本语法
+        if (Test-Path $configPath) {
+          Write-Host "验证配置文件: $configPath"
           try {
             [xml]$config = Get-Content $configPath -ErrorAction Stop
             Write-Host "✅ XML语法验证通过"
-            
-            # 检查关键组件
-            $components = @(
-              "Microsoft-Windows-Setup",
-              "Microsoft-Windows-Shell-Setup"
-            )
-            
-            foreach ($comp in $components) {
-              $node = $config.SelectSingleNode("//*[@name='$comp']")
-              if ($node) {
-                Write-Host "  找到组件: $comp"
-              } else {
-                Write-Warning "  未找到组件: $comp"
-              }
-            }
           } catch {
             Write-Warning "XML语法验证失败: $_"
           }
-          
-          # 显示前几行内容
-          Write-Host "配置文件前5行内容:"
-          Get-Content $configPath -Head 5 | ForEach-Object { Write-Host "  $_" }
-          
-        } catch {
-          Write-Warning "配置文件验证出错: $_"
+        } else {
+          Write-Host "⚠️ 配置文件不存在: $configPath"
         }
 
     # 5. 制作ISO
@@ -198,15 +172,10 @@ jobs:
       run: |
         cd %FILE_NAME%
         echo 当前目录: %CD%
-        echo 目录内容:
         dir
-        
         echo 开始运行UUP转换脚本...
         echo 开始时间: %time%
-        
-        # 运行UUP转换脚本
         uup_download_windows.cmd
-        
         echo 结束时间: %time%
         echo UUP转换完成!
 
@@ -218,11 +187,13 @@ jobs:
         echo ISO文件生成位置: %CD%
         echo 生成的ISO文件:
         dir *.iso
-        
-        # 检查ISO文件大小
-        for %%i in (*.iso) do (
-          echo 文件: %%~nxi
-          echo 大小: %%~zi 字节 (约 %%~zi/1048576 MB)
+        if exist *.iso (
+          for %%i in (*.iso) do (
+            echo 文件: %%~nxi
+            echo 大小: %%~zi 字节
+          )
+        ) else (
+          echo ❌ 未找到ISO文件!
         )
 
     # 7. 打包分卷压缩
@@ -231,16 +202,13 @@ jobs:
       run: |
         echo 开始打包ISO文件...
         
-        # 检查ISO文件是否存在
         if not exist "%FILE_NAME%\*.iso" (
           echo ❌ 错误: 未找到ISO文件!
           exit 1
         )
         
-        # 设置压缩包名称
         set ARCHIVE_NAME=%FILE_NAME%-%Build_VERSION%
         
-        # 确保安装了7-Zip
         where 7z >nul 2>nul
         if errorlevel 1 (
           echo 正在安装7-Zip...
@@ -250,22 +218,17 @@ jobs:
           set ZIP_TOOL=7z
         )
         
-        # 创建压缩包 (分卷1950M以适应GitHub Releases限制)
         echo 正在创建分卷压缩包: %ARCHIVE_NAME%.7z
         %ZIP_TOOL% a -v1950M "%ARCHIVE_NAME%.7z" "./%FILE_NAME%/*.iso" -mx=9
         
-        # 显示压缩结果
         echo 压缩完成! 生成的文件:
         dir "%ARCHIVE_NAME%.7z*"
 
     # 8. 上传到构建产物
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@v4
       with:
         name: ${{env.FILE_NAME}}-${{env.Build_VERSION}}
-        path: |
-          ${{env.FILE_NAME}}-${{env.Build_VERSION}}.7z*
-          ${{env.FILE_NAME}}/*.log
+        path: ${{env.FILE_NAME}}-${{env.Build_VERSION}}.7z*
         retention-days: 7
         if-no-files-found: error
 
@@ -286,20 +249,12 @@ jobs:
           - **构建时间**: ${{ github.run_started_at }}
           
           ### 无人值守配置
-          ${{ steps.deploy_config.outputs.CONFIG_USED == 'true' && format('
-          - **配置文件**: {0} ({1})
-          - **集成状态**: ✅ 已集成', steps.deploy_config.outputs.CONFIG_SOURCE == 'primary' && '主用配置' || '备用配置', steps.deploy_config.outputs.CONFIG_SOURCE) || '- **集成状态**: ⚪ 未集成 (纯净ISO)' }}
-          
-          ${{ inputs.skip_oem_integration == 'true' && '- **备注**: 用户选择跳过无人值守配置集成' || '' }}
+          ${{ steps.deploy_config.outputs.CONFIG_USED == 'true' && format('- **配置文件**: {0}', steps.deploy_config.outputs.CONFIG_SOURCE == 'primary' && '主用配置' || '备用配置') || '- **集成状态**: 未集成 (纯净ISO)' }}
           
           ### 使用说明
           1. 下载所有 `.7z.001`, `.7z.002`... 分卷文件
           2. 使用 [7-Zip](https://www.7-zip.org/) 解压第一个分卷 (.7z.001)
           3. 得到完整的 Windows 11 ISO 文件
-          
-          ### 校验信息
-          - **构建工作流**: [${{ github.workflow }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
-          - **提交哈希**: ${{ github.sha }}
           
           ---
           
@@ -308,25 +263,23 @@ jobs:
         draft: false
         prerelease: false
         files: ${{env.FILE_NAME}}-${{env.Build_VERSION}}.7z*
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    # 10. 构建完成通知（修复版）
+    # 10. 构建完成通知
     - name: Build completion status
       if: always()
       shell: powershell
       run: |
+        $status = "${{ job.status }}"
         Write-Host "========================================"
         Write-Host "🏗️  构建任务完成"
         Write-Host "========================================"
-        Write-Host "任务状态: ${{ job.status }}"
+        Write-Host "任务状态: $status"
         Write-Host "构建版本: ${{ env.Build_VERSION }}"
         Write-Host "运行编号: ${{ github.run_number }}"
         Write-Host "配置文件: ${{ steps.deploy_config.outputs.CONFIG_SOURCE || '未使用' }}"
         Write-Host "========================================"
         
-        # 根据构建状态显示不同消息
-        if ('${{ job.status }}' -eq 'success') {
+        if ($status -eq "success") {
           Write-Host "✅ 构建成功!"
         } else {
           Write-Host "❌ 构建失败!"
