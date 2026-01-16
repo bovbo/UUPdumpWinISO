@@ -84,22 +84,35 @@ jobs:
         dir *.7z*
 
     # 上传到Google Drive (使用官方Google Actions)
-    - name: Authenticate to Google Cloud
-      uses: google-github-actions/auth@v2
-      with:
-        credentials_json: ${{ secrets.GDRIVE_CREDENTIALS }} # 这里是你之前创建的Secret，内容是Base64编码的凭据JSON
+    # 上传到Google Drive (使用rclone命令行工具)
+    - name: Upload to Google Drive with rclone
+      shell: pwsh
+      run: |
+        # 1. 安装 rclone
+        curl -O https://downloads.rclone.org/rclone-current-windows-amd64.zip
+        Expand-Archive -Path rclone-current-windows-amd64.zip -DestinationPath .\rclone-temp
+        Move-Item -Path .\rclone-temp\rclone-*-windows-amd64\rclone.exe -Destination .\rclone.exe
 
-    - name: Upload to Google Drive
-      uses: google-github-actions/upload-google-drive@v2
-      with:
-        # 要上传的文件路径
-        file: ./${{ env.FILE_NAME }}-${{ env.Build_VERSION }}.7z*
-        # 目标Google Drive文件夹的ID
-        folderId: '1RqedO6FcIk6uegGq9z8_Y2f_T-VObHf-' # 请替换为你的文件夹ID
-        # (可选) 在云端重命名文件
-        name: Windows11_25H2_amd64_自动构建.7z
-        # (可选) 同名时是否覆盖，默认为 false
-        overwrite: true
+        # 2. 从 GitHub Secret 解码凭据并配置 rclone
+        $credentialJson = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String("${{ secrets.GDRIVE_CREDENTIALS }}"))
+        $credentialJson | Out-File -FilePath client_secret.json -Encoding utf8
+
+        .\rclone.exe config create gdrive_remote drive config_is_local false --non-interactive
+        .\rclone.exe config update gdrive_remote client_id ((Get-Content client_secret.json | ConvertFrom-Json).installed.client_id)
+        .\rclone.exe config update gdrive_remote client_secret ((Get-Content client_secret.json | ConvertFrom-Json).installed.client_secret)
+        .\rclone.exe config update gdrive_remote scope drive.file
+        .\rclone.exe config update gdrive_remote token '{"access_token":"dummy","expiry":"2000-01-01"}' # 初始占位符
+
+        # 3. 启动本地Web服务器进行OAuth授权 (需要手动操作)
+        Write-Host "请复制以下链接到浏览器中完成授权："
+        .\rclone.exe authorize "drive" --client-id ((Get-Content client_secret.json | ConvertFrom-Json).installed.client_id) --client-secret ((Get-Content client_secret.json | ConvertFrom-Json).installed.client_secret) --port 53682
+
+        # 4. 将授权获取的token更新到配置
+        $token = Read-Host "请输入上一步获取的token字符串"
+        .\rclone.exe config update gdrive_remote token $token
+
+        # 5. 上传文件到Google Drive (替换your_folder_id_here)
+        .\rclone.exe copy -P .\${{ env.FILE_NAME }}-${{ env.Build_VERSION }}.7z* gdrive_remote:1RqedO6FcIk6uegGq9z8_Y2f_T-VObHf-/
 
     # 上传到Artifacts (备用)
     - name: Upload artifacts
