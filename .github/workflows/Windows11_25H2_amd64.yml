@@ -85,14 +85,13 @@ jobs:
 
     # 上传到Google Drive (请确保已配置 GDRIVE_CREDENTIALS 和 parent-folder-id)
     - name: Upload to Google Drive
-      uses: bonitasoft/gdrive-upload-action@v1
+      uses: EndBug/google-drive-upload-action@v1
       with:
         credentials: ${{ secrets.GDRIVE_CREDENTIALS }}
-        parent-folder-id: '1RqedO6FcIk6uegGq9z8_Y2f_T-VObHf-' # 请替换为真实ID
-        source-filepath: ./${{ env.FILE_NAME }}-${{ env.Build_VERSION }}.7z*
-        target-filepath: Windows11_25H2_amd64_自动构建.7z
+        folder-id: '1RqedO6FcIk6uegGq9z8_Y2f_T-VObHf-' # 替换为您的文件夹ID
+        file-path: ./${{ env.FILE_NAME }}-${{ env.Build_VERSION }}.7z* # 注意参数名从 source-filepath 改为了 file-path
+        file-name: Windows11_25H2_amd64_自动构建.7z # 参数名从 target-filepath 改为了 file-name
         overwrite: true
-        create-checksum: true
 
     # 上传到Artifacts (备用)
     - name: Upload artifacts
