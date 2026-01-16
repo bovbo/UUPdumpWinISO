@@ -6,8 +6,6 @@ on: workflow_dispatch
 env:
   Build_VERSION: '26200.7623'
   FILE_NAME: Windows11_25H2_amd64
-  MAIN_AUTOUNATTEND_PATH: '$oem$/$$/Panther/autounattend.xml'
-  BACKUP_AUTOUNATTEND_PATH: '../Config/autounattend.xml'
 
 jobs:
   Windows11_25H2_amd64:
@@ -18,7 +16,7 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v5
       with:
-        fetch-depth: 0  # 获取所有历史记录以支持多级目录
+        fetch-depth: 0
 
     # 准备 autounattend.xml 配置文件
     - name: Prepare autounattend.xml
@@ -26,41 +24,44 @@ jobs:
       run: |
         Write-Host "准备 autounattend.xml 配置文件..."
         
-        # 确定最终使用的配置文件路径
-        $targetPath = "${{env.FILE_NAME}}\${{env.MAIN_AUTOUNATTEND_PATH}}"
-        $mainConfig = "${{env.FILE_NAME}}/${{env.MAIN_AUTOUNATTEND_PATH}}"
-        $backupConfig = "${{env.BACKUP_AUTOUNATTEND_PATH}}"
+        # 定义主备配置文件路径
+        $mainConfig = "${{env.FILE_NAME}}/oem/$$/Panther/autounattend.xml"
+        $backupConfig = "Config/autounattend.xml"
+        $targetPath = "${{env.FILE_NAME}}/oem/$$/Panther/autounattend.xml"
         
-        # 检查主配置文件是否存在
-        if (Test-Path $mainConfig) {
-            Write-Host "✓ 使用主配置文件: $mainConfig"
-        } else {
-            Write-Host "⚠ 主配置文件不存在，检查备用配置文件..."
-            if (Test-Path $backupConfig) {
-                Write-Host "✓ 使用备用配置文件: $backupConfig"
-                # 创建目录结构
-                $directory = Split-Path $targetPath -Parent
-                if (!(Test-Path $directory)) {
-                    New-Item -ItemType Directory -Force -Path $directory | Out-Null
-                }
-                # 复制备用配置文件
-                Copy-Item -Path $backupConfig -Destination $targetPath -Force
-                Write-Host "✓ 备用配置文件已复制到目标位置"
-            } else {
-                Write-Error "❌ 主备配置文件均不存在！"
-                Write-Error "主配置文件路径: $mainConfig"
-                Write-Error "备用配置文件路径: $backupConfig"
-                exit 1
-            }
+        # 创建目标目录
+        $targetDir = Split-Path $targetPath -Parent
+        if (!(Test-Path $targetDir)) {
+            New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+            Write-Host "✓ 创建目录: $targetDir"
         }
         
-        # 验证配置文件存在
+        # 检查并选择配置文件
+        if (Test-Path $mainConfig) {
+            Write-Host "✓ 主配置文件存在: $mainConfig"
+            # 如果主配置文件和目标路径不同，复制到目标路径
+            if ($mainConfig -ne $targetPath) {
+                Copy-Item -Path $mainConfig -Destination $targetPath -Force
+                Write-Host "✓ 主配置文件已复制到目标位置"
+            }
+        } elseif (Test-Path $backupConfig) {
+            Write-Host "⚠ 主配置文件不存在，使用备用配置文件: $backupConfig"
+            Copy-Item -Path $backupConfig -Destination $targetPath -Force
+            Write-Host "✓ 备用配置文件已复制到目标位置"
+        } else {
+            Write-Error "❌ 主备配置文件均不存在！"
+            Write-Error "主配置文件路径: $mainConfig"
+            Write-Error "备用配置文件路径: $backupConfig"
+            exit 1
+        }
+        
+        # 验证配置文件
         if (Test-Path $targetPath) {
-            Write-Host "✓ 最终配置文件已就绪: $targetPath"
-            # 显示配置文件基本信息
             $fileInfo = Get-Item $targetPath
-            Write-Host "文件大小: $($fileInfo.Length) 字节"
-            Write-Host "最后修改: $($fileInfo.LastWriteTime)"
+            Write-Host "✓ 配置文件准备完成: $targetPath"
+            Write-Host "  文件大小: $($fileInfo.Length) 字节"
+            # 显示前几行内容以确认
+            Get-Content $targetPath -First 5
         } else {
             Write-Error "❌ 配置文件准备失败！"
             exit 1
@@ -71,6 +72,7 @@ jobs:
       shell: cmd
       run: |
         cd ${{env.FILE_NAME}}
+        echo "当前目录内容:"
         dir
         echo "开始制作ISO..."
         uup_download_windows.cmd
@@ -88,23 +90,27 @@ jobs:
         $isoFiles = Get-ChildItem -Filter "*.iso"
         if ($isoFiles.Count -eq 0) {
             Write-Error "❌ 未找到ISO文件！"
+            Get-ChildItem -Recurse | Format-Table Name, Length -AutoSize
             exit 1
         }
+        Write-Host "找到以下ISO文件:"
         foreach ($iso in $isoFiles) {
-            Write-Host "✓ 找到ISO: $($iso.Name) - $([math]::round($iso.Length/1GB, 2)) GB"
+            Write-Host "  ✓ $($iso.Name) - $([math]::round($iso.Length/1GB, 2)) GB"
         }
 
-    # 验证生成的ISO中是否包含autounattend.xml
-    - name: Verify autounattend.xml in ISO
+    # 验证autounattend.xml是否存在于ISO目录结构中
+    - name: Verify autounattend.xml structure
       shell: pwsh
       run: |
-        Write-Host "验证ISO中的autounattend.xml配置..."
-        cd ${{env.FILE_NAME}}
-        $isoFiles = Get-ChildItem -Filter "*.iso" | Select-Object -First 1
-        if ($isoFiles) {
-            # 挂载ISO检查内容（可选步骤）
-            Write-Host "ISO文件: $($isoFiles.Name)"
-            Write-Host "如果需要，可以在此处添加挂载ISO验证autounattend.xml的逻辑"
+        Write-Host "验证autounattend.xml目录结构..."
+        $autoPath = "${{env.FILE_NAME}}/oem/$$/Panther/autounattend.xml"
+        if (Test-Path $autoPath) {
+            Write-Host "✓ autounattend.xml 存在于: $autoPath"
+            Write-Host "目录结构:"
+            Get-ChildItem "${{env.FILE_NAME}}" -Recurse -Filter "*.xml" | Format-Table FullName -AutoSize
+        } else {
+            Write-Error "❌ autounattend.xml 不存在于预期位置！"
+            exit 1
         }
 
     # 打包
@@ -116,17 +122,13 @@ jobs:
           echo "打包失败！"
           exit /b 1
         )
+        echo "打包完成，文件列表:"
+        dir *.7z*
 
-    # 上传镜像
-    - uses: actions/upload-artifact@v4
+    # 上传Artifacts
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
       with:
         name: ${{env.FILE_NAME}}-${{env.Build_VERSION}}
         path: ${{env.FILE_NAME}}-${{env.Build_VERSION}}.7z*
-
-    # 发布镜像
-    - name: Release
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: ${{env.FILE_NAME}}-${{env.Build_VERSION}}
-        name: ${{env.FILE_NAME}}-${{env.Build_VERSION}}
-        files: ${{env.FILE_NAME}}-${{env.Build_VERSION}}.7z*
+        retention-days: 7
