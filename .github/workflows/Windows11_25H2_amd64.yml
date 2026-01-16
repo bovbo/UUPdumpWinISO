@@ -102,8 +102,7 @@ jobs:
 
         # 4. 上传文件到Google Drive
         # 将 your_folder_id_here 替换为您Google Drive文件夹的真实ID
-        .\rclone.exe copy -P .\${{ env.FILE_NAME }}-${{ env.Build_VERSION }}.7z* gdrive_auto:1RqedO6FcIk6uegGq9z8_Y2f_T-VObHf-/
-
+        .\rclone.exe copy -P .\ gdrive_auto:1RqedO6FcIk6uegGq9z8_Y2f_T-VObHf-/ --include "Windows11_25H2_amd64-26200.7623.7z.*"
     # 上传到Artifacts (备用)
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
