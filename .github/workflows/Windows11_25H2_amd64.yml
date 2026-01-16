@@ -1,53 +1,330 @@
 name: Windows11_25H2_amd64
 
-on: workflow_dispatch
-#on: [push, pull_request]
+# 触发条件：手动触发 + 自动触发
+on:
+  workflow_dispatch:  # 手动触发
+    inputs:
+      use_primary_config:
+        description: '是否使用主用配置 (Windows11_25H2_amd64/$oem$/$$/Panther/autounattend.xml)'
+        type: boolean
+        default: true
+        required: false
+      skip_oem_integration:
+        description: '跳过无人值守配置集成 (构建纯净ISO)'
+        type: boolean
+        default: false
+        required: false
+  push:  # 推送代码时自动触发
+    paths:
+      - '.github/workflows/Windows11_25H2_amd64.yml'
+      - 'Windows11_25H2_amd64/**'
+      - 'Config/**'
+    branches: [ main, master ]
+  pull_request:  # 创建PR时触发
+    paths:
+      - 'Windows11_25H2_amd64/**'
+      - 'Config/**'
 
 env:
   Build_VERSION: '26200.7623'
   FILE_NAME: Windows11_25H2_amd64
+  # 配置文件路径定义
+  PRIMARY_CONFIG_PATH: 'Windows11_25H2_amd64/$oem$/$$/Panther/autounattend.xml'
+  BACKUP_CONFIG_PATH: 'Config/autounattend.xml'
+  TARGET_OEM_PATH: 'Windows11_25H2_amd64/$oem$/$$/Panther/'
 
 jobs:
   Windows11_25H2_amd64:
     runs-on: windows-latest
+    timeout-minutes: 120  # 设置超时时间
 
     steps:
-
-    # 检出本仓库
+    # 1. 检出仓库
     - name: Checkout repository
       uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
 
-    # 制作ISO
+    # 2. 显示构建信息
+    - name: Show build info
+      shell: cmd
+      run: |
+        echo ========================================
+        echo 🪟 Windows 11 25H2 amd64 ISO 构建
+        echo ========================================
+        echo 构建版本: %Build_VERSION%
+        echo 文件目录: %FILE_NAME%
+        echo 触发方式: ${{ github.event_name }}
+        echo 是否手动触发使用主用配置: ${{ inputs.use_primary_config || '未指定' }}
+        echo 是否跳过OEM集成: ${{ inputs.skip_oem_integration || '未指定' }}
+        echo ========================================
+
+    # 3. 智能部署无人值守配置文件
+    - name: Deploy autounattend.xml (智能选择)
+      id: deploy_config
+      shell: cmd
+      run: |
+        echo 开始部署无人值守配置文件...
+        echo 主用配置路径: %PRIMARY_CONFIG_PATH%
+        echo 备用配置路径: %BACKUP_CONFIG_PATH%
+        
+        # 检查是否跳过OEM集成
+        if "%{{ inputs.skip_oem_integration }}%" == "true" (
+          echo ⏭️ 用户选择跳过无人值守配置集成，将构建纯净ISO
+          echo SKIP_OEM=true >> "%GITHUB_OUTPUT%"
+          exit 0
+        )
+        
+        # 确定使用哪个配置文件
+        set USE_PRIMARY=true
+        
+        # 手动触发时，优先使用用户选择
+        if not "%{{ github.event_name }}%" == "workflow_dispatch" (
+          echo 自动触发模式，尝试查找可用配置...
+        ) else (
+          echo 手动触发模式，检查用户选择...
+          if "%{{ inputs.use_primary_config }}%" == "true" (
+            echo 用户选择使用主用配置
+            set USE_PRIMARY=true
+          ) else (
+            echo 用户选择不使用主用配置，将尝试使用备用配置
+            set USE_PRIMARY=false
+          )
+        )
+        
+        # 检查主用配置是否存在
+        if "%USE_PRIMARY%" == "true" (
+          if exist "%PRIMARY_CONFIG_PATH%" (
+            echo ✅ 主用配置文件存在
+            echo CONFIG_SOURCE=primary >> "%GITHUB_OUTPUT%"
+            echo CONFIG_USED=true >> "%GITHUB_OUTPUT%"
+            goto :config_ready
+          ) else (
+            echo ⚠️ 主用配置文件不存在，将尝试备用配置
+          )
+        )
+        
+        # 检查备用配置是否存在
+        if exist "%BACKUP_CONFIG_PATH%" (
+          echo ✅ 备用配置文件存在
+          echo CONFIG_SOURCE=backup >> "%GITHUB_OUTPUT%"
+          echo CONFIG_USED=true >> "%GITHUB_OUTPUT%"
+          
+          # 确保目标目录存在
+          if not exist "%TARGET_OEM_PATH%" (
+            mkdir "%TARGET_OEM_PATH%"
+            echo 创建目录: %TARGET_OEM_PATH%
+          )
+          
+          # 复制备用配置文件到目标位置
+          copy "%BACKUP_CONFIG_PATH%" "%TARGET_OEM_PATH%"
+          echo 已将备用配置复制到: %TARGET_OEM_PATH%
+          goto :config_ready
+        ) else (
+          echo ⚠️ 备用配置文件也不存在
+          echo CONFIG_SOURCE=none >> "%GITHUB_OUTPUT%"
+          echo CONFIG_USED=false >> "%GITHUB_OUTPUT%"
+          echo ℹ️ 将构建不含无人值守配置的ISO
+          goto :end
+        )
+        
+        :config_ready
+        echo ✅ 无人值守配置文件已就绪
+        echo 配置文件位置: %TARGET_OEM_PATH%autounattend.xml
+        
+        :end
+        echo 配置文件部署步骤完成
+
+    # 4. 验证配置文件 (仅当使用配置时)
+    - name: Validate autounattend.xml
+      if: steps.deploy_config.outputs.CONFIG_USED == 'true'
+      shell: powershell
+      continue-on-error: true  # 验证失败也不停止构建
+      run: |
+        $configPath = "${{ env.TARGET_OEM_PATH }}autounattend.xml"
+        Write-Host "验证配置文件: $configPath"
+        
+        try {
+          # 检查文件是否存在
+          if (-not (Test-Path $configPath)) {
+            throw "配置文件不存在: $configPath"
+          }
+          
+          # 检查文件大小
+          $fileSize = (Get-Item $configPath).Length
+          Write-Host "文件大小: $fileSize 字节"
+          
+          if ($fileSize -lt 100) {
+            Write-Warning "配置文件可能过小，请检查内容"
+          }
+          
+          # 尝试读取为XML验证基本语法
+          try {
+            [xml]$config = Get-Content $configPath -ErrorAction Stop
+            Write-Host "✅ XML语法验证通过"
+            
+            # 检查关键组件
+            $components = @(
+              "Microsoft-Windows-Setup",
+              "Microsoft-Windows-Shell-Setup"
+            )
+            
+            foreach ($comp in $components) {
+              $node = $config.SelectSingleNode("//*[@name='$comp']")
+              if ($node) {
+                Write-Host "  找到组件: $comp"
+              } else {
+                Write-Warning "  未找到组件: $comp"
+              }
+            }
+          } catch {
+            Write-Warning "XML语法验证失败: $_"
+          }
+          
+          # 显示前几行内容
+          Write-Host "配置文件前5行内容:"
+          Get-Content $configPath -Head 5 | ForEach-Object { Write-Host "  $_" }
+          
+        } catch {
+          Write-Warning "配置文件验证出错: $_"
+        }
+
+    # 5. 制作ISO
     - name: UUP dump WinISO
       shell: cmd
       run: |
-        cd ${{env.FILE_NAME}}
+        cd %FILE_NAME%
+        echo 当前目录: %CD%
+        echo 目录内容:
         dir
+        
+        echo 开始运行UUP转换脚本...
+        echo 开始时间: %time%
+        
+        # 运行UUP转换脚本
         uup_download_windows.cmd
+        
+        echo 结束时间: %time%
+        echo UUP转换完成!
 
-    # 查看目录
-    - name: dir dir
+    # 6. 查看生成的ISO文件
+    - name: Check generated ISO
       shell: cmd
       run: |
-        cd ${{env.FILE_NAME}}
-        dir
+        cd %FILE_NAME%
+        echo ISO文件生成位置: %CD%
+        echo 生成的ISO文件:
+        dir *.iso
+        
+        # 检查ISO文件大小
+        for %%i in (*.iso) do (
+          echo 文件: %%~nxi
+          echo 大小: %%~zi 字节 (约 %%~zi/1048576 MB)
+        )
 
-    # 打包
+    # 7. 打包分卷压缩
     - name: Package binaries
+      shell: cmd
       run: |
-        #ls     #Directory: D:\a\UUPdumpWinISO\UUPdumpWinISO(即仓库目录)
-        7z a -v1950M ${{env.FILE_NAME}}-${{env.Build_VERSION}}.7z ./${{env.FILE_NAME}}/*.iso -mx=9
+        echo 开始打包ISO文件...
+        
+        # 检查ISO文件是否存在
+        if not exist "%FILE_NAME%\*.iso" (
+          echo ❌ 错误: 未找到ISO文件!
+          exit 1
+        )
+        
+        # 设置压缩包名称
+        set ARCHIVE_NAME=%FILE_NAME%-%Build_VERSION%
+        
+        # 确保安装了7-Zip
+        where 7z >nul 2>nul
+        if errorlevel 1 (
+          echo 正在安装7-Zip...
+          curl -L https://www.7-zip.org/a/7zr.exe -o 7zr.exe
+          set ZIP_TOOL=7zr.exe
+        ) else (
+          set ZIP_TOOL=7z
+        )
+        
+        # 创建压缩包 (分卷1950M以适应GitHub Releases限制)
+        echo 正在创建分卷压缩包: %ARCHIVE_NAME%.7z
+        %ZIP_TOOL% a -v1950M "%ARCHIVE_NAME%.7z" "./%FILE_NAME%/*.iso" -mx=9
+        
+        # 显示压缩结果
+        echo 压缩完成! 生成的文件:
+        dir "%ARCHIVE_NAME%.7z*"
 
-    # 上传镜像
-    - uses: actions/upload-artifact@v4
+    # 8. 上传到构建产物
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
       with:
         name: ${{env.FILE_NAME}}-${{env.Build_VERSION}}
-        path: ${{env.FILE_NAME}}-${{env.Build_VERSION}}.7z*
+        path: |
+          ${{env.FILE_NAME}}-${{env.Build_VERSION}}.7z*
+          ${{env.FILE_NAME}}/*.log
+        retention-days: 7
+        if-no-files-found: error
 
-    # 发布镜像
-    - name: Release
+    # 9. 创建版本发布 (仅手动触发时)
+    - name: Create Release
+      if: github.event_name == 'workflow_dispatch'
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: ${{env.FILE_NAME}}-${{env.Build_VERSION}}
-        name: ${{env.FILE_NAME}}-${{env.Build_VERSION}}
+        tag_name: ${{env.FILE_NAME}}-${{env.Build_VERSION}}-${{ github.run_number }}
+        name: Windows 11 25H2 amd64 (${{env.Build_VERSION}})
+        body: |
+          ## Windows 11 25H2 amd64 ISO
+          
+          ### 构建信息
+          - **版本**: ${{ env.Build_VERSION }}
+          - **构建编号**: ${{ github.run_number }}
+          - **触发方式**: ${{ github.event_name }}
+          - **构建时间**: ${{ github.run_started_at }}
+          
+          ### 无人值守配置
+          ${{ steps.deploy_config.outputs.CONFIG_USED == 'true' && format('
+          - **配置文件**: {0} ({1})
+          - **集成状态**: ✅ 已集成', steps.deploy_config.outputs.CONFIG_SOURCE == 'primary' && '主用配置' || '备用配置', steps.deploy_config.outputs.CONFIG_SOURCE) || '- **集成状态**: ⚪ 未集成 (纯净ISO)' }}
+          
+          ${{ inputs.skip_oem_integration == 'true' && '- **备注**: 用户选择跳过无人值守配置集成' || '' }}
+          
+          ### 使用说明
+          1. 下载所有 `.7z.001`, `.7z.002`... 分卷文件
+          2. 使用 [7-Zip](https://www.7-zip.org/) 解压第一个分卷 (.7z.001)
+          3. 得到完整的 Windows 11 ISO 文件
+          
+          ### 校验信息
+          - **构建工作流**: [${{ github.workflow }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          - **提交哈希**: ${{ github.sha }}
+          
+          ---
+          
+          *此版本为自动构建生成，仅供测试和学习使用。*
+          
+        draft: false
+        prerelease: false
         files: ${{env.FILE_NAME}}-${{env.Build_VERSION}}.7z*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # 10. 构建完成通知
+    - name: Build completion status
+      if: always()
+      shell: cmd
+      run: |
+        echo ========================================
+        echo 🏗️  构建任务完成
+        echo ========================================
+        echo 任务状态: ${{ job.status }}
+        echo 构建版本: %Build_VERSION%
+        echo 运行编号: ${{ github.run_number }}
+        echo 配置文件: ${{ steps.deploy_config.outputs.CONFIG_SOURCE || '未使用' }}
+        echo ========================================
+        
+        # 根据构建状态显示不同消息
+        if "${{ job.status }}" == "success" (
+          echo ✅ 构建成功!
+        ) else (
+          echo ❌ 构建失败!
+        )
