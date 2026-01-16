@@ -1,40 +1,48 @@
 name: Windows11_25H2_amd64
 
-# 触发条件：手动触发 + 自动触发
+# 简化触发条件
 on:
-  workflow_dispatch:  # 手动触发
-    inputs:
-      use_primary_config:
-        description: '是否使用主用配置 (Windows11_25H2_amd64/$oem$/$$/Panther/autounattend.xml)'
-        type: boolean
-        default: true
-        required: false
-      skip_oem_integration:
-        description: '跳过无人值守配置集成 (构建纯净ISO)'
-        type: boolean
-        default: false
-        required: false
-  push:  # 推送代码时自动触发
-    paths:
-      - '.github/workflows/Windows11_25H2_amd64.yml'
-      - 'Windows11_25H2_amd64/**'
-      - 'Config/**'
-    branches: [ main, master ]
-  pull_request:  # 创建PR时触发
+  workflow_dispatch:
+  push:
     paths:
       - 'Windows11_25H2_amd64/**'
-      - 'Config/**'
+    branches: [ main ]
+  pull_request:
+    paths:
+      - 'Windows11_25H2_amd64/**'
 
 env:
   Build_VERSION: '26200.7623'
   FILE_NAME: Windows11_25H2_amd64
-  # 配置文件路径定义
-  PRIMARY_CONFIG_PATH: 'Windows11_25H2_amd64/$oem$/$$/Panther/autounattend.xml'
-  BACKUP_CONFIG_PATH: 'Config/autounattend.xml'
-  TARGET_OEM_PATH: 'Windows11_25H2_amd64/$oem$/$$/Panther/'
 
 jobs:
   Windows11_25H2_amd64:
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+    # 1. 检出仓库
+    - name: Checkout repository
+      uses: actions/checkout@v5
+
+    # 2. 制作ISO
+    - name: UUP dump WinISO
+      shell: cmd
+      run: |
+        cd %FILE_NAME%
+        uup_download_windows.cmd
+
+    # 3. 打包
+    - name: Package binaries
+      shell: cmd
+      run: |
+        7z a -v1950M %FILE_NAME%-%Build_VERSION%.7z ./%FILE_NAME%/*.iso -mx=9
+
+    # 4. 上传到构建产物
+    - uses: actions/upload-artifact@v4
+      with:
+        name: ${{env.FILE_NAME}}-${{env.Build_VERSION}}
+        path: ${{env.FILE_NAME}}-${{env.Build_VERSION}}.7z*  Windows11_25H2_amd64:
     runs-on: windows-latest
     timeout-minutes: 120  # 设置超时时间
 
