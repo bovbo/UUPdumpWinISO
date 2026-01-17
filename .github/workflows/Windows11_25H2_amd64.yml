@@ -82,36 +82,23 @@ jobs:
         )
         echo "打包完成"
         dir *.7z*
-    # 上传到Artifacts (备用)
+    # ================= 第一：上传到 GitHub Releases (永久存储) =================
+    - name: Create Release and Upload Assets
+      uses: softprops/action-gh-release@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: build-${{ env.Build_VERSION }}
+        name: Windows 11 25H2 Build ${{ env.Build_VERSION }}
+        files: ./${{ env.FILE_NAME }}-${{ env.Build_VERSION }}.7z.*
+        draft: false
+        prerelease: false
+
+    # ================= 第二：上传到 Actions Artifacts (7天缓存) =================
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: ${{env.FILE_NAME}}-${{env.Build_VERSION}}
-        path: ${{env.FILE_NAME}}-${{env.Build_VERSION}}.7z*
+        path: ${{env.FILE_NAME}}-${{env.Build_VERSION}}.7z.*
         retention-days: 7
-    # 上传到Google Drive (使用服务账号，全自动)
-    - name: Upload to Google Drive with rclone
-      shell: pwsh
-      run: |
-        # 1. 安装 rclone (保持不变)
-        curl -O https://downloads.rclone.org/rclone-current-windows-amd64.zip
-        Expand-Archive -Path rclone-current-windows-amd64.zip -DestinationPath .\rclone-temp
-        Move-Item -Path .\rclone-temp\rclone-*-windows-amd64\rclone.exe -Destination .\rclone.exe
-
-        # 2. 准备服务账号密钥文件 (保持不变)
-        $serviceAccountKey = "${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}"
-        [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($serviceAccountKey)) | Out-File -FilePath service_account_key.json -Encoding utf8
-
-        # 3. 配置 rclone (保持不变)
-        .\rclone.exe config create gdrive_auto drive service_account_file service_account_key.json --non-interactive
-
-        # 4. 上传文件到Google Drive 【请替换为下方的新命令】
-        # === 选择以下两种写法中的一种替换此行即可 ===
-        # 写法一：逐条命令
-        .\rclone.exe copy -P .\Windows11_25H2_amd64-26200.7623.7z.001 gdrive_auto:1RqedO6FcIk6uegGq9z8_Y2f_T-VObHf-/
-        .\rclone.exe copy -P .\Windows11_25H2_amd64-26200.7623.7z.002 gdrive_auto:1RqedO6FcIk6uegGq9z8_Y2f_T-VObHf-/
-        .\rclone.exe copy -P .\Windows11_25H2_amd64-26200.7623.7z.003 gdrive_auto:1RqedO6FcIk6uegGq9z8_Y2f_T-VObHf-/
-        .\rclone.exe copy -P .\Windows11_25H2_amd64-26200.7623.7z.004 gdrive_auto:1RqedO6FcIk6uegGq9z8_Y2f_T-VObHf-/
-        # 写法二：循环命令 (与写法一效果相同，任选其一)
-        #foreach ($num in @('001','002','003','004')) { .\rclone.exe copy -P .\Windows11_25H2_amd64-26200.7623.7z.$num gdrive_auto:1RqedO6FcIk6uegGq9z8_Y2f_T-VObHf-/ }
 
