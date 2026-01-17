@@ -2,75 +2,80 @@ name: Windows11_25H2_amd64
 
 on:
   workflow_dispatch:
+# on: [push, pull_request]
 
 env:
   BUILD_VERSION: "26200.7623"
-  FILE_NAME: Windows11_25H2_amd64  
+  FILE_NAME: Windows11_25H2_amd64
 
 permissions:
   contents: write
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  build:
+  Windows11_25H2_amd64:
     runs-on: windows-latest
     timeout-minutes: 270
 
     steps:
+      # 1. 检出仓库
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
+      # 2. 准备配置文件
       - name: Prepare autounattend.xml
         shell: pwsh
         run: |
-          # 用 Join-Path + 单引号，确保 $$ 是字面量目录名（不会被 PowerShell 展开）
           $targetPath = Join-Path "${{ env.FILE_NAME }}" 'oem\$$\Panther\autounattend.xml'
-          $targetDir  = Split-Path $targetPath -Parent
+          $targetDir = Split-Path $targetPath -Parent
           New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
 
-          if (Test-Path $targetPath) {  
-            Write-Host "✓ 主配置文件已存在：$targetPath"
-          } elseif (Test-Path 'Config/autounattend.xml') {
-            Write-Host "⚠ 使用备用配置文件：Config/autounattend.xml"
-            Copy-Item -Path 'Config/autounattend.xml' -Destination $targetPath -Force
+          if (Test-Path $targetPath) {
+            Write-Host "✓ 主配置文件已存在。"
+          } elseif (Test-Path "Config/autounattend.xml") {
+            Write-Host "⚠ 使用备用配置文件。"
+            Copy-Item -Path "Config/autounattend.xml" -Destination $targetPath -Force
           } else {
             Write-Host "ℹ️ 未提供配置文件，UUP将使用默认配置。"
           }
 
+      # 3. 制作ISO
       - name: UUP dump WinISO
         shell: cmd
         run: |
           cd /d "%GITHUB_WORKSPACE%\${{ env.FILE_NAME }}"
           echo 开始制作ISO...
+          dir
+          if not exist "uup_download_windows.cmd" (
+            echo 缺少 uup_download_windows.cmd，目录不对或仓库内容不完整
+            exit /b 1
+          )
           call uup_download_windows.cmd
           if errorlevel 1 (
             echo ISO制作失败！
             exit /b 1
           )
 
+      # 4. 验证ISO文件
       - name: Verify ISO files
         shell: pwsh
         run: |
+          Write-Host "验证ISO文件..."
           $isoDir = Join-Path "${{ env.FILE_NAME }}" ''
-          $isoFiles = Get-ChildItem -Path $isoDir -Filter '*.iso' -File
-          if (-not $isoFiles) { throw "❌ 未找到任何ISO文件，UUP脚本可能执行失败。" }
+          $isoFiles = Get-ChildItem -Path $isoDir -Filter "*.iso" -File
+          if (-not $isoFiles) {
+            Write-Error "❌ 未找到任何ISO文件，UUP脚本可能执行失败。"
+            exit 1
+          }
+          Write-Host "✓ 成功找到 $($isoFiles.Count) 个ISO文件"
 
-          Write-Host "✓ 成功找到 $($isoFiles.Count) 个ISO文件："
-          $isoFiles | ForEach-Object { Write-Host " - $($_.FullName)" }
-
+      # 5. 打包
       - name: Package binaries
         shell: cmd
         run: |
-          set "SEVENZIP=C:\Program Files\7-Zip\7z.exe"
-          if not exist "%SEVENZIP%" set "SEVENZIP=7z"
-
           echo 开始打包...
-          "%SEVENZIP%" a -v1950M "${{ env.FILE_NAME }}-${{ env.BUILD_VERSION }}.7z" "%GITHUB_WORKSPACE%\${{ env.FILE_NAME }}\*.iso" -mx=9
+          7z a -v1950M "${{ env.FILE_NAME }}-${{ env.BUILD_VERSION }}.7z" "%GITHUB_WORKSPACE%\${{ env.FILE_NAME }}\*.iso" -mx=9
           if errorlevel 1 (
             echo 打包失败！
             exit /b 1
@@ -78,7 +83,8 @@ jobs:
           echo 打包完成
           dir "${{ env.FILE_NAME }}-${{ env.BUILD_VERSION }}.7z*"
 
-      - name: Create GitHub Release
+      # 6. 创建 Release 并上传分卷
+      - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -88,23 +94,18 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
-
-      - name: Upload Assets to Release
-        uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: build-${{ env.BUILD_VERSION }}-${{ github.sha }}
           files: ${{ env.FILE_NAME }}-${{ env.BUILD_VERSION }}.7z.*
 
+      # 7. 清理旧 Release（可选）
       - name: Cleanup Old Releases
         uses: dev-drprasad/delete-older-releases@v0.2.0
         with:
           keep_latest: 3
           delete_tags: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # 8. 上传 Actions Artifacts
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
