@@ -72,7 +72,7 @@ jobs:
 
     # 打包 (修正：使用正确的shell)
     - name: Package binaries
-      shell: cmd # 关键修正：此步骤使用批处理语法，必须指定为cmd
+      shell: cmd
       run: |
         echo "开始打包..."
         7z a -v1950M ${{env.FILE_NAME}}-${{env.Build_VERSION}}.7z ./${{env.FILE_NAME}}/*.iso -mx=9
@@ -82,17 +82,54 @@ jobs:
         )
         echo "打包完成"
         dir *.7z*
-    # ================= 第一：上传到 GitHub Releases (永久存储) =================
-    - name: Create Release and Upload Assets
+
+    # ================= 优化1：简化配置文件准备步骤 =================
+    - name: Prepare autounattend.xml (Optimized)
+      shell: pwsh
+      run: |
+        $targetPath = "${{env.FILE_NAME}}/oem/$$/Panther/autounattend.xml"
+        $targetDir = Split-Path $targetPath -Parent
+        New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+        
+        # 更清晰的逻辑判断
+        if (Test-Path $targetPath) {
+            Write-Host "✓ 主配置文件已存在。"
+        } elseif (Test-Path "Config/autounattend.xml") {
+            Write-Host "⚠ 使用备用配置文件。"
+            Copy-Item -Path "Config/autounattend.xml" -Destination $targetPath -Force
+        } else {
+            Write-Host "ℹ️ 未提供配置文件，UUP将使用默认配置。"
+        }
+
+    # ================= 优化2：分步上传至GitHub Releases (高成功率) =================
+    - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: build-${{ env.Build_VERSION }}
         name: Windows 11 25H2 Build ${{ env.Build_VERSION }}
-        files: ./${{ env.FILE_NAME }}-${{ env.Build_VERSION }}.7z.*
         draft: false
         prerelease: false
+        generate_release_notes: true
+        # 重要：创建时不传文件
+
+    - name: Upload Assets to Release
+      uses: softprops/action-gh-release@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: build-${{ env.Build_VERSION }} # 必须与上一步的tag_name一致
+        files: ./${{ env.FILE_NAME }}-${{ env.Build_VERSION }}.7z.*
+
+    # ================= 新增3：自动清理旧版本Release (保留最新的2个) =================
+    - name: Cleanup Old Releases
+      uses: dev-drprasad/delete-older-releases@v0.2.0
+      with:
+        keep_latest: 2 # 保留最新2个版本，您可以根据需要调整
+        delete_tags: true # 同时删除关联的Git标签
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     # ================= 第二：上传到 Actions Artifacts (7天缓存) =================
     - name: Upload artifacts
